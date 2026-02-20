@@ -2,14 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta
+    name="viewport"
+    content="width=device-width,initial-scale=1,maximum-scale=1"
+  />
   <title>Gizmo’s Table Scraps (16-bit + Starving Meter)</title>
   <style>
     :root { color-scheme: dark; }
-    html, body { height: 100%; margin: 0; background:#05060a; overflow:hidden; }
-    canvas { display:block; width:100vw; height:100vh; image-rendering: pixelated; image-rendering: crisp-edges; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background:#05060a;
+      overflow:hidden;
+      touch-action: none; /* important for mobile controls */
+    }
+    canvas {
+      display:block;
+      width:100vw;
+      height:100vh;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
     .tip {
-      position: fixed; left: 10px; bottom: 10px;
+      position: fixed;
+      left: 10px; bottom: 10px;
       font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       font-size: 12px;
       padding: 8px 10px;
@@ -21,17 +38,71 @@
       backdrop-filter: blur(8px);
       line-height: 1.25;
       max-width: min(1100px, 94vw);
+      pointer-events: none;
     }
     .tip b { color:#fff; }
-    
+
+    /* Mobile controls */
+    #mobileControls {
+      position: fixed;
+      left: 0; right: 0; bottom: 10px;
+      display: none;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      pointer-events: none; /* containers ignore, buttons re-enable */
+    }
+    .pad, .actions {
+      display: flex;
+      gap: 10px;
+      pointer-events: auto;
+    }
+    .btn {
+      -webkit-tap-highlight-color: transparent;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.35);
+      color: rgba(255,255,255,.9);
+      font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-weight: 800;
+      border-radius: 14px;
+      padding: 14px 14px;
+      min-width: 64px;
+      text-align: center;
+      user-select: none;
+      touch-action: none;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 28px rgba(0,0,0,.35);
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn.small { min-width: 56px; padding: 12px 12px; }
+    .btn.wide { min-width: 84px; }
+
+    @media (pointer: coarse), (max-width: 820px) {
+      .tip { display: none; }
+      #mobileControls { display: flex; }
+    }
   </style>
 </head>
 <body>
-<canvas id="screen"></canvas>
-<div class="tip">
-  <b>Move</b>: ← → / A D · <b>Dash</b>: Shift · <b>Slurp</b>: X / ↑ (pull nearby) ·
-  <b>Start/Pause</b>: Space · <b>Restart</b>: R · <b>Mute</b>: M · <b>Music</b>: B · <b>Vol</b>: - +
-</div>
+  <canvas id="screen"></canvas>
+
+  <div class="tip">
+    <b>Move</b>: ← → / A D · <b>Dash</b>: Shift · <b>Slurp</b>: X / ↑ (vacuum) ·
+    <b>Start/Pause</b>: Space · <b>Restart</b>: R · <b>Mute</b>: M · <b>Music</b>: B · <b>Vol</b>: - +
+  </div>
+
+  <!-- Mobile controls -->
+  <div id="mobileControls" aria-label="Mobile controls">
+    <div class="pad">
+      <div class="btn" data-act="left">◀</div>
+      <div class="btn" data-act="right">▶</div>
+    </div>
+    <div class="actions">
+      <div class="btn wide" data-act="slurp">SLURP</div>
+      <div class="btn wide" data-act="dash">DASH</div>
+      <div class="btn small" data-act="pause">⏯</div>
+    </div>
+  </div>
 
 <script>
 (() => {
@@ -54,7 +125,10 @@
 
     const aspect = W / H;
     BH = BASE_H;
-    BW = Math.max(256, Math.min(560, Math.round(BH * aspect)));
+    // slightly narrower on phones so sprites are bigger
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    const maxW = coarse ? 460 : 560;
+    BW = Math.max(256, Math.min(maxW, Math.round(BH * aspect)));
     buf.width = BW;
     buf.height = BH;
 
@@ -144,7 +218,7 @@
         case 'bad':      this.chord([220, 233.08, 246.94], 0.10, 'sawtooth', 0.10); break;
         case 'miss':     this.beep({freq:210, dur:0.07, type:'triangle', vol:0.30, slide:-90}); break;
         case 'dash':     this.beep({freq:520, dur:0.06, type:'square', vol:0.35, slide:260}); break;
-        case 'slurp':    this.beep({freq:300, dur:0.12, type:'triangle', vol:0.45, slide:520}); break;
+        case 'slurp':    this.beep({freq:250, dur:0.14, type:'triangle', vol:0.45, slide:700}); break;
         case 'danger':   this.beep({freq:180, dur:0.12, type:'sawtooth', vol:0.22, slide:-30}); break;
         case 'gameover':
           this.beep({freq:392, dur:0.10, type:'triangle', vol:0.40, slide:-120});
@@ -165,7 +239,6 @@
       const stepDur = 0.125;
       const lookAhead = 0.20;
 
-      // light “kitchen chiptune”
       const pattern = [
         440, 523.25, 659.25, 523.25,
         392, 493.88, 587.33, 493.88,
@@ -230,15 +303,13 @@
     right: () => BW - 14,
   };
 
-  // ======== INPUT (FIXED KEYBOARD RELIABILITY) ========
-  // Keyboard stopped “working” before because pointer mode could keep overriding it.
-  // This adds an explicit control mode: keys win until you move the pointer intentionally.
+  // ======== INPUT (KEYS + POINTER + MOBILE) ========
+  // Important: keys should not be overridden by slight pointer jitter.
   const input = {
     left:false, right:false, dash:false, slurp:false,
     mode:'keys', // 'keys' | 'pointer'
     targetX:null,
     lastKeyMs: 0,
-    lastPointerMs: 0,
   };
 
   function screenToWorldX(clientX){
@@ -249,26 +320,20 @@
   function setKeysMode() {
     input.mode = 'keys';
     input.lastKeyMs = now();
-    input.targetX = null; // stop pointer override immediately
+    input.targetX = null;
   }
 
   function maybeSetPointerMode(x) {
-    // Only switch to pointer mode if it's a real move AND not within a recent key press.
     const t = now();
-    const recentKeys = (t - input.lastKeyMs) < 220;
-    if (recentKeys) return;
-
+    if ((t - input.lastKeyMs) < 220) return; // keys win briefly
     input.mode = 'pointer';
-    input.lastPointerMs = t;
     input.targetX = x;
   }
 
-  function handleKeydown(e) {
+  // Keyboard listeners on document so focus doesn't matter.
+  document.addEventListener('keydown', (e) => {
     unlockAudioOnce();
-
     const code = e.code;
-
-    // Prevent scrolling / browser hotkeys for the ones we own
     const owned = new Set([
       'ArrowLeft','ArrowRight','ArrowUp','Space',
       'KeyA','KeyD','KeyX','ShiftLeft','ShiftRight',
@@ -290,34 +355,30 @@
     if (code === 'KeyB') { Audio.musicOn = !Audio.musicOn; if (!Audio.musicOn) Audio.stopMusic(); }
     if (code === 'Minus' || code === 'NumpadSubtract') Audio.setGain(Audio.gain - 0.08);
     if (code === 'Equal' || code === 'NumpadAdd') Audio.setGain(Audio.gain + 0.08);
-  }
+  }, { capture:true, passive:false });
 
-  function handleKeyup(e) {
+  document.addEventListener('keyup', (e) => {
     const code = e.code;
     if (code === 'ArrowLeft' || code === 'KeyA') input.left = false;
     if (code === 'ArrowRight' || code === 'KeyD') input.right = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') input.dash = false;
     if (code === 'KeyX' || code === 'ArrowUp') input.slurp = false;
-  }
-
-  // Capture on document so it works even if canvas isn't focused
-  document.addEventListener('keydown', handleKeydown, { capture: true, passive: false });
-  document.addEventListener('keyup', handleKeyup, { capture: true, passive: true });
+  }, { capture:true, passive:true });
 
   window.addEventListener('mousemove', (e) => {
     const x = screenToWorldX(e.clientX);
-    // Ignore tiny jitter so keyboard doesn't “lose” control
+    // ignore jitter; only switch if meaningfully moved
     if (input.targetX === null || Math.abs(x - input.targetX) >= 2) maybeSetPointerMode(x);
   });
 
   window.addEventListener('touchstart', (e) => {
     unlockAudioOnce();
     if (e.touches[0]) maybeSetPointerMode(screenToWorldX(e.touches[0].clientX));
-  }, {passive:true});
+  }, {passive:false});
 
   window.addEventListener('touchmove', (e) => {
     if (e.touches[0]) maybeSetPointerMode(screenToWorldX(e.touches[0].clientX));
-  }, {passive:true});
+  }, {passive:false});
 
   window.addEventListener('pointerdown', () => {
     unlockAudioOnce();
@@ -325,13 +386,33 @@
     else if (state.paused) togglePause();
   });
 
+  // Mobile buttons
+  function bindHoldButton(el, onDown, onUp) {
+    const down = (ev) => { ev.preventDefault(); unlockAudioOnce(); onDown(); };
+    const up   = (ev) => { ev.preventDefault(); onUp(); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('pointerleave', up);
+  }
+
+  document.querySelectorAll('[data-act]').forEach(btn => {
+    const act = btn.getAttribute('data-act');
+    if (act === 'left')  bindHoldButton(btn, () => { input.left = true; setKeysMode(); }, () => { input.left = false; });
+    if (act === 'right') bindHoldButton(btn, () => { input.right = true; setKeysMode(); }, () => { input.right = false; });
+    if (act === 'dash')  bindHoldButton(btn, () => { input.dash = true; setKeysMode(); }, () => { input.dash = false; });
+    if (act === 'slurp') bindHoldButton(btn, () => { input.slurp = true; setKeysMode(); }, () => { input.slurp = false; });
+    if (act === 'pause') {
+      btn.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        unlockAudioOnce();
+        if (!state.running) start();
+        else togglePause();
+      });
+    }
+  });
+
   // ======== GAME STATE (STARVING DYNAMICS) ========
-  // Starving goes UP:
-  //  - constantly over time
-  //  - extra on misses (more if you're doing well)
-  // Starving goes DOWN:
-  //  - on catches (food-dependent "feed" values)
-  // Game ends if Starving reaches 100.
   const state = {
     running: false,
     paused: true,
@@ -344,7 +425,7 @@
     caught: 0,
     missed: 0,
 
-    starving: 35, // starts hungry but not doomed
+    starving: 35, // 0..100
     dangerPulseT: 0,
 
     level: 1,
@@ -361,6 +442,8 @@
 
     slurpTime: 0,
     slurpCooldown: 0,
+
+    slurpVfx: 0, // purely visual pulse
 
     twinkleT: 0
   };
@@ -412,14 +495,15 @@
     pxFill(x-10, y+11+bob, 20, 2, '#c0182b');
     pxFill(x-2,  y+11+bob, 4, 2, '#ffcf4d');
 
+    // slurp indicator sparkle
     if (state.running && !state.paused && state.slurpCooldown <= 0) {
-      pxFill(x-1, y-10, 2, 2, 'rgba(86,255,150,0.45)');
+      pxFill(x-1, y-10, 2, 2, 'rgba(137,214,255,0.75)');
     }
   }
 
-  // ======== FUNNY FOOD TYPES (PIXEL SPRITES + NUTRITION) ========
-  // feed: how much it lowers starving on catch
-  // base: score points (negative = gross mistake)
+  // ======== FUNNY FOOD TYPES ========
+  // base: score points
+  // feed: reduces starving (negative feed raises starving)
   const FoodTypes = [
     { name:'Couch Fry (Vintage)', base: 14, feed: 12, rarity: 1.0, draw:(x,y)=>{
       pxFill(x-3,y-3,6,6,'#5a3a1a'); pxFill(x-2,y-4,1,7,'#ffd35a'); pxFill(x,y-4,1,7,'#ffd35a'); pxFill(x+2,y-4,1,7,'#ffd35a');
@@ -451,7 +535,6 @@
     { name:'Steak of Destiny (GOLD)', base: 55, feed: 12, rarity: 0.16, onCatch:()=>{ state.magnetTime = 7.0; Audio.sfx('power'); }, draw:(x,y)=>{
       pxFill(x-5,y-3,10,6,'#ffcf4d'); pxFill(x-4,y-2,8,4,'#ff8b2e'); pxFill(x-2,y-1,4,2,'#fff2b0'); pxFill(x-6,y-4,12,1,'rgba(255,255,255,0.25)');
     }},
-    // Bad items (raise starving + negative points)
     { name:'Sock (Not Food)', base: -15, feed: -18, bad:true, rarity: 0.28, draw:(x,y)=>{
       pxFill(x-4,y-4,8,8,'#6a7080'); pxFill(x-2,y-4,4,1,'#8b93a6'); pxFill(x-1,y+2,2,2,'#4e5462');
     }},
@@ -473,16 +556,13 @@
     const x = randi(world.left()+18, world.right()-18);
     const y = world.tableY + 10;
 
-    // Algorithmic challenge:
-    // - difficulty increases with time alive AND with low starving (if you're comfortable, it ramps)
-    const comfort = clamp((60 - state.starving) / 60, 0, 1);  // 0 when starving high, 1 when comfy
-    const diff = 1 + (state.tAlive / 35) + comfort*0.9;       // ramps faster if you're doing great
-    const diffClamped = clamp(diff, 1, 4.2);
+    const comfort = clamp((60 - state.starving) / 60, 0, 1);
+    const diff = clamp(1 + (state.tAlive / 35) + comfort*0.9, 1, 4.2);
 
     state.scraps.push({
       x, y,
-      vx: rand(-12,12) * (1 + diffClamped*0.08),
-      vy: rand(36, 52) + diffClamped*9,
+      vx: rand(-12,12) * (1 + diff*0.10),
+      vy: rand(34, 50) + diff*10,
       wob: rand(0.8, 1.4),
       wT: rand(0, Math.PI*2),
       type: t,
@@ -547,6 +627,7 @@
     state.dashCooldown = 0;
     state.slurpTime = 0;
     state.slurpCooldown = 0;
+    state.slurpVfx = 0;
 
     resetGizmo();
     update.spawnT = 0;
@@ -571,10 +652,8 @@
       bctx.fillStyle = `rgb(${r},${g},${b})`;
       bctx.fillRect(0,y,BW,1);
     }
-
     for (let x=0; x<BW; x+=10) pxFill(x, 0, 2, world.tableY-6, 'rgba(255,255,255,0.06)');
 
-    // window
     pxFill(14, 14, 58, 34, '#0b1430');
     pxFill(16, 16, 54, 30, '#122a6a');
     state.twinkleT += 0.01;
@@ -588,13 +667,11 @@
     pxFill(42,14,2,34,'rgba(255,255,255,0.18)');
     pxFill(14,31,58,2,'rgba(255,255,255,0.18)');
 
-    // table
     const ty = world.tableY;
     pxFill(0, ty, BW, world.tableTopH, '#6b3b22');
     pxFill(0, ty+2, BW, 2, '#8f563b');
     pxFill(0, ty+world.tableTopH, BW, world.tableLipH, '#3a1f12');
 
-    // legs
     const legY = ty+world.tableTopH+world.tableLipH;
     const legH = world.floorY() - legY + 6;
     pxFill(28, legY, 10, legH, '#4b2a18');
@@ -602,7 +679,6 @@
     pxFill(30, legY, 2, legH, 'rgba(255,255,255,0.10)');
     pxFill(BW-36, legY, 2, legH, 'rgba(255,255,255,0.10)');
 
-    // floor
     const fy = world.floorY();
     pxFill(0, fy, BW, BH-fy, '#151a28');
     for (let y=fy; y<BH; y+=8){
@@ -613,13 +689,12 @@
     }
     pxFill(0, fy, BW, 1, 'rgba(255,255,255,0.18)');
 
-    // sign
     pxFill(BW-156, 14, 140, 16, 'rgba(0,0,0,0.25)');
     outlineRect(BW-156,14,140,16,'rgba(255,255,255,0.16)');
     pxText('KEEP GIZMO ALIVE', BW-152, 18, '#56ff96');
   }
 
-  // ======== HUD (STARVING METER) ========
+  // ======== HUD ========
   function starvingColor(v){
     if (v < 45) return '#56ff96';
     if (v < 75) return '#ffd35a';
@@ -635,13 +710,10 @@
     const barX = 6;
     const barY = 6;
 
-    // starving bar frame
     pxFill(barX-1, barY-1, barW+2, 7, 'rgba(0,0,0,0.40)');
     outlineRect(barX-1, barY-1, barW+2, 7, 'rgba(255,255,255,0.18)');
     pxFill(barX, barY, barW, 5, 'rgba(255,255,255,0.06)');
-
-    const fill = Math.round(barW * (st/100));
-    pxFill(barX, barY, fill, 5, starvingColor(st));
+    pxFill(barX, barY, Math.round(barW * (st/100)), 5, starvingColor(st));
 
     const mag  = state.magnetTime > 0 ? ` MAG:${state.magnetTime.toFixed(0)} ` : '';
     const slow = state.slowTime > 0 ? ` SLOW:${state.slowTime.toFixed(0)} ` : '';
@@ -656,14 +728,14 @@
     );
 
     pxFill(0,BH-10, BW, 10, 'rgba(0,0,0,0.22)');
-    pxText('Catch lowers STARVING. Miss raises it. Starving=100 -> Gizmo eats the table leg.', 6, BH-9, '#ffd35a');
+    pxText('Catch lowers STARVING. Miss raises it. 100% -> Gizmo eats the table leg.', 6, BH-9, '#ffd35a');
   }
 
   function drawOverlay(){
     if (!state.running && state.paused) {
       const msg1 = 'GIZMO’S TABLE SCRAPS';
       const msg2 = `BEST:${state.best}  LAST:${state.score}`;
-      const msg3 = 'SPACE:PLAY  R:RESET  X/↑:SLURP  SHIFT:DASH';
+      const msg3 = 'SPACE/⏯:PLAY  R:RESET  SLURP:X/↑  DASH:SHIFT';
       const msg4 = 'STARVING rises over time + misses. Catch to survive.';
 
       pxFill(14, 54, BW-28, 68, 'rgba(0,0,0,0.58)');
@@ -673,44 +745,107 @@
       pxText(msg4, Math.floor(BW/2) - (msg4.length*4), 86, '#ffd35a');
       pxText(msg3, Math.floor(BW/2) - (msg3.length*4), 98, '#ff6aa6');
     } else if (state.paused) {
-      const msg = 'PAUSED  (SPACE)';
-      pxFill(60, 72, BW-120, 24, 'rgba(0,0,0,0.55)');
-      outlineRect(60,72,BW-120,24,'rgba(255,255,255,0.18)');
+      const msg = 'PAUSED';
+      pxFill(74, 72, BW-148, 24, 'rgba(0,0,0,0.55)');
+      outlineRect(74,72,BW-148,24,'rgba(255,255,255,0.18)');
       pxText(msg, Math.floor(BW/2) - (msg.length*4), 78, '#ffd35a');
     }
   }
 
-  // ======== MECHANICS ========
+  // ======== SLURP (FIXED + MUCH MORE OBVIOUS) ========
   function applySlurp(dt){
     if (state.slurpTime <= 0) return;
 
-    const radius = 30;
+    const radius = 52;          // bigger than before
+    const strength = 900;       // much stronger than before
     const cx = gizmo.x;
     const cy = gizmo.y + 6;
 
+    // Visual pulse timer
+    state.slurpVfx = Math.max(state.slurpVfx, 0.18);
+
     for (const s of state.scraps) {
+      // Don't vacuum bad items as strongly (still possible)
+      const badMul = s.type.bad ? 0.55 : 1.0;
+
       const dx = cx - s.x;
       const dy = cy - s.y;
-      const d2 = dx*dx + dy*dy;
+      const d = Math.max(1, Math.sqrt(dx*dx + dy*dy));
+      if (d > radius) continue;
 
-      if (d2 <= radius*radius) {
-        const inv = 1 / Math.max(1, Math.sqrt(d2));
-        const pull = 200 * inv;
-        s.vx += dx * pull * dt;
-        s.vy += dy * pull * dt;
-        s.pulled = 0.25;
+      const t = 1 - (d / radius); // 0..1
+      const accel = strength * (0.35 + 0.65*t) * badMul;
+
+      // Accelerate toward Gizmo
+      s.vx += (dx / d) * accel * dt;
+      s.vy += (dy / d) * accel * dt;
+
+      // tiny sparkle trail
+      s.pulled = 0.30;
+      state.particles.push({
+        x: s.x + rand(-1,1),
+        y: s.y + rand(-1,1),
+        vx: rand(-15,15),
+        vy: rand(-10,10),
+        g: 40,
+        t: 0,
+        life: 0.18,
+        c: s.type.bad ? '#ff6aa6' : '#89d6ff'
+      });
+
+      // If it's very close, nudge it into the catch zone
+      if (d < 10 && !s.type.bad) {
+        s.x += (dx / d) * 30 * dt;
+        s.y += (dy / d) * 30 * dt;
       }
     }
   }
 
+  function drawSlurpVfx(){
+    if (state.slurpVfx <= 0) return;
+    const x = gizmo.x|0;
+    const y = (gizmo.y + 4)|0;
+    const pulse = state.slurpVfx;
+
+    // ring around gizmo
+    const r = 10 + Math.round(pulse * 22);
+    const c = 'rgba(137,214,255,0.25)';
+    for (let i=0;i<12;i++){
+      const a = (i/12) * Math.PI * 2;
+      const px = x + Math.round(Math.cos(a) * r);
+      const py = y + Math.round(Math.sin(a) * r);
+      pxFill(px, py, 1, 1, c);
+    }
+
+    // suction lines to nearby scraps
+    const radius = 52;
+    const cx = gizmo.x;
+    const cy = gizmo.y + 6;
+    let drawn = 0;
+    for (const s of state.scraps) {
+      const dx = cx - s.x;
+      const dy = cy - s.y;
+      const d2 = dx*dx + dy*dy;
+      if (d2 > radius*radius) continue;
+      if (drawn++ > 7) break; // limit clutter
+
+      const steps = 5;
+      for (let k=1;k<=steps;k++){
+        const t = k/(steps+1);
+        const lx = Math.round(s.x + dx*t);
+        const ly = Math.round(s.y + dy*t);
+        pxFill(lx, ly, 1, 1, s.type.bad ? 'rgba(255,106,166,0.25)' : 'rgba(137,214,255,0.35)');
+      }
+    }
+  }
+
+  // ======== DIFFICULTY + STARVING ========
   function starvationTick(dt){
-    // Passive hunger increases (ramps with time + low starving -> more pressure when you're doing well)
     const comfort = clamp((60 - state.starving) / 60, 0, 1);
     const diff = clamp(1 + (state.tAlive/40) + comfort*0.8, 1, 4.0);
-    const passive = (3.6 + diff*1.6) * dt;   // ~5.2..10.0 per second later
+    const passive = (3.6 + diff*1.6) * dt;
     state.starving = clamp(state.starving + passive, 0, 100);
 
-    // Danger audio pulse when high
     if (state.starving >= 85) {
       state.dangerPulseT += dt;
       if (state.dangerPulseT >= 0.7) {
@@ -722,26 +857,22 @@
     }
   }
 
+  // ======== UPDATE ========
   function update(dt){
     state.tAlive += dt;
 
-    // power-up timers
+    // timers
     if (state.magnetTime > 0) state.magnetTime = Math.max(0, state.magnetTime - dt);
     if (state.slowTime > 0) state.slowTime = Math.max(0, state.slowTime - dt);
-
-    // dash timers
     if (state.dashTime > 0) state.dashTime = Math.max(0, state.dashTime - dt);
     if (state.dashCooldown > 0) state.dashCooldown = Math.max(0, state.dashCooldown - dt);
-
-    // slurp timers
     if (state.slurpTime > 0) state.slurpTime = Math.max(0, state.slurpTime - dt);
     if (state.slurpCooldown > 0) state.slurpCooldown = Math.max(0, state.slurpCooldown - dt);
+    if (state.slurpVfx > 0) state.slurpVfx = Math.max(0, state.slurpVfx - dt);
 
-    // starvation always ticks
     starvationTick(dt);
     if (state.starving >= 100) { gameOver(); return; }
 
-    // slow-time scaling (helps in danger)
     const slowFactor = (state.slowTime > 0) ? 0.62 : 1.0;
     dt *= slowFactor;
 
@@ -752,10 +883,10 @@
       Audio.sfx('dash');
     }
 
-    // slurp trigger
+    // slurp trigger (works on keyboard + mobile button; hold ok, it re-triggers once cooldown done)
     if (input.slurp && state.slurpCooldown <= 0 && state.slurpTime <= 0) {
-      state.slurpTime = 0.45;
-      state.slurpCooldown = 1.15;
+      state.slurpTime = 0.55;
+      state.slurpCooldown = 1.10;
       Audio.sfx('slurp');
     }
 
@@ -777,11 +908,10 @@
     gizmo.x = clamp(gizmo.x, world.left()+10, world.right()-10);
     gizmo.mouth = Math.max(0, gizmo.mouth - dt*4);
 
-    // difficulty label
     state.level = 1 + Math.floor(state.tAlive / 18);
 
-    // spawn cadence (adaptive: easier when starving high)
-    const starvingEase = clamp((state.starving - 40) / 60, 0, 1); // 0..1
+    // spawn cadence (easier when starving high)
+    const starvingEase = clamp((state.starving - 40) / 60, 0, 1);
     const comfort = clamp((60 - state.starving) / 60, 0, 1);
     const diff = clamp(1 + (state.tAlive/35) + comfort*0.9, 1, 4.2);
 
@@ -793,7 +923,7 @@
       if (Math.random() < (0.04 + diff*0.02) && starvingEase < 0.8) spawnScrap();
     }
 
-    // slurp effect
+    // slurp effect (strong + obvious)
     applySlurp(dt);
 
     // scraps update + collision
@@ -805,7 +935,6 @@
     for (let i=state.scraps.length-1; i>=0; i--){
       const s = state.scraps[i];
 
-      // magnet assistance for non-bad items
       const baseMag = 0.08;
       const powerMag = (state.magnetTime > 0) ? 0.40 : 0;
       const magStrength = baseMag + powerMag;
@@ -833,8 +962,6 @@
         gizmo.mouth = 1;
         state.caught++;
 
-        // starvation delta
-        // Catch always helps (unless bad), and big streak gives a tiny extra “confidence snack”.
         const streakTier = Math.min(4, Math.floor(state.streak / 6));
         if (s.type.bad) {
           state.streak = 0;
@@ -854,7 +981,6 @@
           state.starving = clamp(state.starving - (s.type.feed + feedBonus), 0, 100);
 
           if (s.type.onCatch) s.type.onCatch();
-
           if (pts >= 30 || streakTier >= 3) Audio.sfx('bonus');
           else Audio.sfx('catch');
 
@@ -866,20 +992,17 @@
         continue;
       }
 
-      // miss: allowed, but pushes starving up (challenge)
+      // miss
       if (s.y > fy + 10) {
         state.scraps.splice(i,1);
         state.missed++;
         if (state.streak > 0) state.streak = 0;
 
-        // Miss penalty increases slightly when you're doing well (prevents “AFK win”),
-        // but eases off when you're already near danger.
-        const dangerEase = clamp((state.starving - 70)/30, 0, 1); // 0..1
-        const missBase = 7.0 + clamp(state.tAlive/50, 0, 3.0);    // slowly ramps
-        const missBonus = (1 - dangerEase) * 2.5;                  // less extra when already struggling
+        const dangerEase = clamp((state.starving - 70)/30, 0, 1);
+        const missBase = 7.0 + clamp(state.tAlive/50, 0, 3.0);
+        const missBonus = (1 - dangerEase) * 2.5;
         state.starving = clamp(state.starving + missBase + missBonus, 0, 100);
 
-        // tiny score nudge (not the main punishment)
         state.score = Math.max(0, state.score - 1);
 
         Audio.sfx('miss');
@@ -907,10 +1030,9 @@
     }
   }
 
-  // ======== DRAW ========
+  // ======== DRAW HELPERS ========
   function drawScrap(s){
     const x = s.x|0, y = s.y|0;
-
     pxFill(x-3, y+4, 6, 1, 'rgba(0,0,0,0.25)');
     s.type.draw(x,y);
 
@@ -920,8 +1042,8 @@
     }
 
     if (s.pulled > 0) {
-      pxFill(x-6, y-6, 1, 1, 'rgba(137,214,255,0.7)');
-      pxFill(x+6, y-4, 1, 1, 'rgba(86,255,150,0.7)');
+      pxFill(x-6, y-6, 1, 1, 'rgba(137,214,255,0.75)');
+      pxFill(x+6, y-4, 1, 1, 'rgba(86,255,150,0.75)');
     }
   }
 
@@ -949,6 +1071,10 @@
     drawBackground();
     for (const s of state.scraps) drawScrap(s);
     drawParticles();
+
+    // slurp VFX behind gizmo but on top of scraps/particles reads better
+    drawSlurpVfx();
+
     drawGizmo();
     drawFloaters();
     drawHUD();
@@ -972,7 +1098,7 @@
     sctx.restore();
   }
 
-  // ======== MAIN LOOP ========
+  // ======== LOOP ========
   function loop(){
     requestAnimationFrame(loop);
 
@@ -990,9 +1116,6 @@
   }
   loop();
 
-  // initial title state
-  state.running = false;
-  state.paused = true;
 })();
 </script>
 </body>
