@@ -586,7 +586,7 @@ function drawGobbles() {
     caught: 0,
     missed: 0,
 
-    gobble: [],
+    gobbles: [],
     starving: 35, // 0..100
     dangerPulseT: 0,
     level: 1,
@@ -617,6 +617,8 @@ function drawGobbles() {
     gizmo.mouth = 0;
     gizmo.bob = 0;
     gizmo.step = 0;
+    state.gobbles.length = 0;
+    gizmo.gobbleT = 0;
   }
   resetGizmo();
 
@@ -1259,7 +1261,6 @@ function drawGobbles() {
       if (!s.type.bad) {
         const pull = clamp((gizmo.x - s.x) * 0.8, -60, 60);
         s.vx += pull * magStrength * dt;
-        startGobble(sx, sy, s.type)
       }
 
       s.wT += dt * s.wob;
@@ -1292,7 +1293,7 @@ function drawGobbles() {
           floatText(sx, sy-10, `NOPE ${s.type.name}`, '#ff6aa6');
         } else {
           state.streak += 1;
-
+          startGobble(sx, sy - 10, s.type); // -10 makes the "fly into mouth" visible
           const comboBonus = streakTier * 4;
           const pts = Math.max(1, s.type.base + comboBonus);
           state.score += pts;
@@ -1312,6 +1313,8 @@ function drawGobbles() {
         if (state.starving >= 100) { gameOver(); return; }
         continue;
       }
+      
+      updateGobbles(dt);
 
       // miss
       if (s.y > fy + 10) {
@@ -1332,7 +1335,6 @@ function drawGobbles() {
         if (state.starving >= 100) { gameOver(); return; }
       }
 
-      updateGobbles(dt);
     }
 
     // particles
