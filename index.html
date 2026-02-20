@@ -166,6 +166,102 @@
     pxFill(x + w - 1, y, 1, h, c);   // right
   }
 
+  function easeOutCubic(t) {
+  t = clamp(t, 0, 1);
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function mouthPos() {
+  // Match your gizmo bob logic so the target feels glued to the mouth.
+  const bob = Math.round(Math.sin(gizmo.bob) * 1);
+  return { x: (gizmo.x | 0), y: ((gizmo.y + 9 + bob) | 0) };
+}
+
+function crumbPop(x, y, n = 8, good = true) {
+  // Light “crumbs” (not a full explosion) so you can spam-catch without visual overload.
+  const palette = good ? ['#fff2b0', '#ffd35a', '#89d6ff', '#56ff96'] : ['#ff6aa6', '#ff2b4f', '#ffd35a'];
+  for (let i = 0; i < n; i++) {
+    state.particles.push({
+      x: x + rand(-1, 1),
+      y: y + rand(-1, 1),
+      vx: rand(-40, 40),
+      vy: rand(-70, -20),
+      g: rand(160, 220),
+      t: 0,
+      life: rand(0.18, 0.35),
+      c: palette[randi(0, palette.length - 1)]
+    });
+  }
+}
+
+function startGobble(sx, sy, type) {
+  // One gobble anim per catch; multiple can run concurrently.
+  state.gobbles.push({
+    sx, sy,
+    t: 0,
+    life: 0.20 + rand(0, 0.06),
+    type,
+    wob: rand(0, Math.PI * 2),
+    didChomp: false
+  });
+
+  // Extend chew if you catch multiple items quickly
+  gizmo.gobbleT = Math.min(0.55, gizmo.gobbleT + 0.16);
+}
+
+function updateGobbles(dt) {
+  for (let i = state.gobbles.length - 1; i >= 0; i--) {
+    const g = state.gobbles[i];
+    g.t += dt;
+
+    // Midway chomp = crumbs at mouth (makes the gobble readable)
+    if (!g.didChomp && g.t >= g.life * 0.55) {
+      g.didChomp = true;
+      const m = mouthPos();
+      crumbPop(m.x, m.y, 6, !g.type.bad);
+    }
+
+    if (g.t >= g.life) {
+      // Final chomp
+      const m = mouthPos();
+      crumbPop(m.x, m.y, 8, !g.type.bad);
+      state.gobbles.splice(i, 1);
+    }
+  }
+
+  // chew timer decay
+  if (gizmo.gobbleT > 0) gizmo.gobbleT = Math.max(0, gizmo.gobbleT - dt);
+}
+
+function drawGobbles() {
+  // Draw the "yummy flying into mouth" and flicker it as it gets eaten.
+  for (const g of state.gobbles) {
+    const p = g.t / g.life;
+    const e = easeOutCubic(p);
+
+    const m = mouthPos();
+    // A little arc so it feels like it’s being pulled in
+    const arc = Math.sin(p * Math.PI) * 6;
+
+    const x = (g.sx + (m.x - g.sx) * e) | 0;
+    const y = (g.sy + (m.y - g.sy) * e - arc) | 0;
+
+    // Near the end, flicker like it’s being consumed
+    const flicker = (p < 0.72) || ((Math.floor(g.t * 60) % 2) === 0);
+    if (!flicker) continue;
+
+    // Draw the actual food sprite using its existing draw() function
+    // (This assumes your type objects have .draw(x,y), which they do.)
+    g.type.draw(x, y);
+
+    // Fake "bite shadow" overlay near the end
+    if (p > 0.75) {
+      pxFill(x + 2, y + 2, 2, 2, 'rgba(0,0,0,0.25)');
+      pxFill(x - 3, y - 2, 1, 1, 'rgba(0,0,0,0.25)');
+    }
+  }
+}
+
   // ================= 5x7 BITMAP FONT (FIXES ALIGNMENT RELIABLY) =================
   // All UI text is rendered via this font (no browser font metrics => no misalignment).
   const FONT = {
@@ -490,6 +586,7 @@
     caught: 0,
     missed: 0,
 
+    gobble: [],
     starving: 35, // 0..100
     dangerPulseT: 0,
     level: 1,
@@ -511,7 +608,7 @@
   };
 
   // ================= GIZMO SPRITE (IMPROVED: 2-FRAME WIGGLE) =================
-  const gizmo = { x: 160, y: 0, vx: 0, speed: 235, mouth: 0, bob: 0, step: 0 };
+  const gizmo = { x: 160, y: 0, vx: 0, speed: 235, mouth: 0, bob: 0, step: 0, gobbleT: 0 };
 
   function resetGizmo(){
     gizmo.x = Math.floor(BW/2);
@@ -570,10 +667,31 @@
     pxFill(x-2, y+6+bob, 4, 2, '#020205');
 
     // mouth
+    // --- MOUTH (chomp animation) ---
+    const chewing = gizmo.gobbleT > 0.001;
+    
+    // 22 is the chew speed. Higher = faster chomps, lower = slower.
+    const chewFrame = chewing ? (Math.floor(gizmo.gobbleT * 22) % 2) : 0;
+    
+    // Open if: (a) your existing catch-mouth timer is active OR (b) chewing and this is the open frame
+    const mouthOpen = (gizmo.mouth > 0.02) || (chewing && chewFrame === 0);
+    
+    // Always draw a subtle mouth line (closed mouth baseline)
     pxFill(x-4, y+8+bob, 8, 1, 'rgba(255,255,255,0.20)');
-    if (gizmo.mouth > 0.02) {
+    
+    if (mouthOpen) {
+      // tongue + open gap
       pxFill(x-2, y+9+bob, 4, 1, '#ff6aa6');
       pxFill(x-4, y+10+bob, 8, 1, '#05060a');
+    
+      // tiny "teeth" sparkle sometimes (optional but reads well in 16-bit)
+      if (chewing && chewFrame === 0) {
+        pxFill(x-3, y+9+bob, 1, 1, '#ffffff');
+        pxFill(x+2, y+9+bob, 1, 1, '#ffffff');
+      }
+    } else {
+      // closed mouth a bit darker (optional)
+      pxFill(x-3, y+9+bob, 6, 1, 'rgba(0,0,0,0.25)');
     }
 
     // collar + tag
@@ -1141,6 +1259,7 @@
       if (!s.type.bad) {
         const pull = clamp((gizmo.x - s.x) * 0.8, -60, 60);
         s.vx += pull * magStrength * dt;
+        startGobble(sx, sy, s.type)
       }
 
       s.wT += dt * s.wob;
@@ -1212,6 +1331,8 @@
 
         if (state.starving >= 100) { gameOver(); return; }
       }
+
+      updateGobbles(dt);
     }
 
     // particles
@@ -1286,9 +1407,11 @@
     drawParticles();
     drawSlurpVfx();
     drawGizmo();
+    drawGobbles();
     drawFloaters();
     drawHUD();
     drawOverlay();
+    
 
     // blit to screen
     sctx.imageSmoothingEnabled = false;
