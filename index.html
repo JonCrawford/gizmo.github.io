@@ -156,6 +156,16 @@
     bctx.fillRect(x|0,y|0,w|0,h|0);
   }
 
+  // ✅ ADD THIS
+  function outlineRect(x, y, w, h, c) {
+    x |= 0; y |= 0; w |= 0; h |= 0;
+    if (w <= 0 || h <= 0) return;
+    pxFill(x, y, w, 1, c);           // top
+    pxFill(x, y + h - 1, w, 1, c);   // bottom
+    pxFill(x, y, 1, h, c);           // left
+    pxFill(x + w - 1, y, 1, h, c);   // right
+  }
+
   // ================= 5x7 BITMAP FONT (FIXES ALIGNMENT RELIABLY) =================
   // All UI text is rendered via this font (no browser font metrics => no misalignment).
   const FONT = {
