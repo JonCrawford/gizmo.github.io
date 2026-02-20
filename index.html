@@ -2,11 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width,initial-scale=1,maximum-scale=1"
-  />
-  <title>Gizmo’s Table Scraps (16-bit + Starving Meter)</title>
+  <!-- iOS Safari: prevent zoom + allow safe-area layout -->
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <title>Gizmo’s Table Scraps (16-bit + Tilt + Tap-Slurp)</title>
   <style>
     :root { color-scheme: dark; }
     html, body {
@@ -14,7 +12,12 @@
       margin: 0;
       background:#05060a;
       overflow:hidden;
-      touch-action: none; /* important for mobile controls */
+      overscroll-behavior: none;
+      touch-action: none; /* helps on modern browsers */
+      -webkit-text-size-adjust: 100%;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
     canvas {
       display:block;
@@ -22,41 +25,21 @@
       height:100vh;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
+      touch-action: none;
     }
 
-    .tip {
-      position: fixed;
-      left: 10px; bottom: 10px;
-      font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 12px;
-      padding: 8px 10px;
-      border-radius: 10px;
-      background: rgba(0,0,0,.35);
-      border: 1px solid rgba(255,255,255,.10);
-      color: rgba(255,255,255,.85);
-      user-select:none;
-      backdrop-filter: blur(8px);
-      line-height: 1.25;
-      max-width: min(1100px, 94vw);
-      pointer-events: none;
-    }
-    .tip b { color:#fff; }
-
-    /* Mobile controls */
+    /* Mobile controls (kept as backup even with tilt) */
     #mobileControls {
       position: fixed;
-      left: 0; right: 0; bottom: 10px;
+      left: 0; right: 0;
+      bottom: calc(10px + env(safe-area-inset-bottom));
       display: none;
       justify-content: space-between;
       gap: 10px;
       padding: 0 12px;
-      pointer-events: none; /* containers ignore, buttons re-enable */
+      pointer-events: none;
     }
-    .pad, .actions {
-      display: flex;
-      gap: 10px;
-      pointer-events: auto;
-    }
+    .pad, .actions { display:flex; gap:10px; pointer-events:auto; }
     .btn {
       -webkit-tap-highlight-color: transparent;
       border: 1px solid rgba(255,255,255,.14);
@@ -68,17 +51,15 @@
       padding: 14px 14px;
       min-width: 64px;
       text-align: center;
-      user-select: none;
       touch-action: none;
       backdrop-filter: blur(8px);
       box-shadow: 0 10px 28px rgba(0,0,0,.35);
     }
     .btn:active { transform: translateY(1px); }
     .btn.small { min-width: 56px; padding: 12px 12px; }
-    .btn.wide { min-width: 84px; }
+    .btn.wide { min-width: 90px; }
 
     @media (pointer: coarse), (max-width: 820px) {
-      .tip { display: none; }
       #mobileControls { display: flex; }
     }
   </style>
@@ -86,19 +67,12 @@
 <body>
   <canvas id="screen"></canvas>
 
-  <div class="tip">
-    <b>Move</b>: ← → / A D · <b>Dash</b>: Shift · <b>Slurp</b>: X / ↑ (vacuum) ·
-    <b>Start/Pause</b>: Space · <b>Restart</b>: R · <b>Mute</b>: M · <b>Music</b>: B · <b>Vol</b>: - +
-  </div>
-
-  <!-- Mobile controls -->
   <div id="mobileControls" aria-label="Mobile controls">
     <div class="pad">
       <div class="btn" data-act="left">◀</div>
       <div class="btn" data-act="right">▶</div>
     </div>
     <div class="actions">
-      <div class="btn wide" data-act="slurp">SLURP</div>
       <div class="btn wide" data-act="dash">DASH</div>
       <div class="btn small" data-act="pause">⏯</div>
     </div>
@@ -106,12 +80,27 @@
 
 <script>
 (() => {
+  // ======== iOS SAFARI: HARD STOP ON DOUBLE-TAP/PINCH ZOOM ========
+  // (iOS ignores parts of touch-action; these handlers are the reliable approach.)
+  document.addEventListener('dblclick', (e) => e.preventDefault(), { passive:false });
+  ['gesturestart','gesturechange','gestureend'].forEach(evt =>
+    document.addEventListener(evt, (e) => e.preventDefault(), { passive:false })
+  );
+  let __lastTouchEnd = 0;
+  document.addEventListener('touchend', (e) => {
+    const t = Date.now();
+    if (t - __lastTouchEnd <= 300) e.preventDefault();
+    __lastTouchEnd = t;
+  }, { passive:false });
+
   // ======== PIXEL / RENDER SETUP ========
   const screen = document.getElementById('screen');
   const sctx = screen.getContext('2d');
 
   const buf = document.createElement('canvas');
   const bctx = buf.getContext('2d');
+
+  const isCoarse = window.matchMedia("(pointer: coarse)").matches;
 
   const BASE_H = 180;
   let BW = 320, BH = BASE_H;
@@ -125,9 +114,7 @@
 
     const aspect = W / H;
     BH = BASE_H;
-    // slightly narrower on phones so sprites are bigger
-    const coarse = window.matchMedia("(pointer: coarse)").matches;
-    const maxW = coarse ? 460 : 560;
+    const maxW = isCoarse ? 460 : 560; // bigger sprites on phone
     BW = Math.max(256, Math.min(maxW, Math.round(BH * aspect)));
     buf.width = BW;
     buf.height = BH;
@@ -150,9 +137,11 @@
   const now   = () => performance.now();
 
   function pxFill(x,y,w,h,c){ bctx.fillStyle=c; bctx.fillRect(x|0,y|0,w|0,h|0); }
+  function setFont8(){ bctx.font = '8px ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace'; }
+  function textW(msg){ setFont8(); return Math.ceil(bctx.measureText(msg).width); }
   function pxText(txt,x,y,c){
     bctx.fillStyle = c;
-    bctx.font = '8px ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace';
+    setFont8();
     bctx.textBaseline='top';
     bctx.fillText(txt, x|0, y|0);
   }
@@ -160,6 +149,58 @@
     bctx.strokeStyle=c;
     bctx.lineWidth=1;
     bctx.strokeRect((x|0)+.5,(y|0)+.5,w|0,h|0);
+  }
+
+  function wrapText(msg, maxPx){
+    setFont8();
+    const words = msg.split(/\s+/);
+    const lines = [];
+    let line = '';
+    for (const w of words) {
+      const cand = line ? (line + ' ' + w) : w;
+      if (textW(cand) <= maxPx) { line = cand; continue; }
+      if (line) lines.push(line);
+      // if a single word is too long, hard-split it
+      if (textW(w) > maxPx) {
+        let chunk = '';
+        for (const ch of w) {
+          const cc = chunk + ch;
+          if (textW(cc) <= maxPx) chunk = cc;
+          else { lines.push(chunk); chunk = ch; }
+        }
+        line = chunk;
+      } else {
+        line = w;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  function drawCenteredPanel(lines, yCenter, bg='rgba(0,0,0,0.58)'){
+    const maxPx = BW - 24;
+    // wrap all lines
+    const wrapped = [];
+    for (const l of lines) wrapped.push(...wrapText(l, maxPx));
+    const padX = 8, padY = 8;
+    const lineH = 10;
+    const w = Math.min(maxPx, Math.max(120, ...wrapped.map(textW)) + padX*2);
+    const h = wrapped.length * lineH + padY*2;
+    const x = Math.floor((BW - w) / 2);
+    const y = Math.floor(yCenter - h/2);
+
+    pxFill(x, y, w, h, bg);
+    outlineRect(x, y, w, h, 'rgba(255,255,255,0.18)');
+
+    let yy = y + padY;
+    for (let i=0;i<wrapped.length;i++){
+      const line = wrapped[i];
+      const xx = Math.floor((BW - textW(line)) / 2);
+      // color first/second lines differently if desired by caller (caller can embed tags, but keep simple)
+      pxText(line, xx, yy, 'rgba(234,246,255,0.92)');
+      yy += lineH;
+    }
+    return { x, y, w, h, wrapped };
   }
 
   // ======== AUDIO (WEB AUDIO, NO FILES) ========
@@ -179,6 +220,9 @@
       this.master = this.ctx.createGain();
       this.master.gain.value = this.muted ? 0 : this.gain;
       this.master.connect(this.ctx.destination);
+    },
+    resume() {
+      if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
     },
     setMute(v) { this.muted = v; if (this.master) this.master.gain.value = v ? 0 : this.gain; },
     setGain(g) { this.gain = clamp(g,0,1); if (this.master) this.master.gain.value = this.muted ? 0 : this.gain; },
@@ -288,10 +332,7 @@
     }
   };
 
-  function unlockAudioOnce() {
-    Audio.ensure();
-    if (Audio.ctx && Audio.ctx.state === 'suspended') Audio.ctx.resume();
-  }
+  function unlockAudioOnce(){ Audio.ensure(); Audio.resume(); }
 
   // ======== WORLD ========
   const world = {
@@ -303,40 +344,41 @@
     right: () => BW - 14,
   };
 
-  // ======== INPUT (KEYS + POINTER + MOBILE) ========
-  // Important: keys should not be overridden by slight pointer jitter.
+  // ======== INPUT ========
   const input = {
-    left:false, right:false, dash:false, slurp:false,
-    mode:'keys', // 'keys' | 'pointer'
+    left:false, right:false, dash:false,
+    mode:'keys', // 'keys' | 'pointer' (pointer move only on non-mobile)
     targetX:null,
     lastKeyMs: 0,
+    slurpPulse: false, // one-shot (tap)
   };
 
+  function setKeysMode(){ input.mode='keys'; input.lastKeyMs=now(); input.targetX=null; }
+
+  // Pointer-move (desktop only)
   function screenToWorldX(clientX){
     const x = clientX - ox;
     return clamp(Math.round(x / scale), 0, BW);
   }
-
-  function setKeysMode() {
-    input.mode = 'keys';
-    input.lastKeyMs = now();
-    input.targetX = null;
-  }
-
-  function maybeSetPointerMode(x) {
+  function maybeSetPointerMode(x){
     const t = now();
-    if ((t - input.lastKeyMs) < 220) return; // keys win briefly
-    input.mode = 'pointer';
+    if ((t - input.lastKeyMs) < 220) return;
+    input.mode='pointer';
     input.targetX = x;
   }
+  if (!isCoarse) {
+    window.addEventListener('mousemove', (e) => {
+      const x = screenToWorldX(e.clientX);
+      if (input.targetX === null || Math.abs(x - input.targetX) >= 2) maybeSetPointerMode(x);
+    });
+  }
 
-  // Keyboard listeners on document so focus doesn't matter.
+  // Keyboard (still useful on desktop)
   document.addEventListener('keydown', (e) => {
     unlockAudioOnce();
     const code = e.code;
     const owned = new Set([
-      'ArrowLeft','ArrowRight','ArrowUp','Space',
-      'KeyA','KeyD','KeyX','ShiftLeft','ShiftRight',
+      'ArrowLeft','ArrowRight','ArrowUp','Space','KeyA','KeyD','KeyX','ShiftLeft','ShiftRight',
       'KeyR','KeyM','KeyB','Minus','Equal','NumpadAdd','NumpadSubtract'
     ]);
     if (owned.has(code)) e.preventDefault();
@@ -344,7 +386,8 @@
     if (code === 'ArrowLeft' || code === 'KeyA') { input.left = true; setKeysMode(); }
     if (code === 'ArrowRight' || code === 'KeyD') { input.right = true; setKeysMode(); }
     if (code === 'ShiftLeft' || code === 'ShiftRight') input.dash = true;
-    if (code === 'KeyX' || code === 'ArrowUp') input.slurp = true;
+
+    if (code === 'KeyX' || code === 'ArrowUp') input.slurpPulse = true;
 
     if (code === 'Space') {
       if (!state.running) start();
@@ -362,57 +405,73 @@
     if (code === 'ArrowLeft' || code === 'KeyA') input.left = false;
     if (code === 'ArrowRight' || code === 'KeyD') input.right = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') input.dash = false;
-    if (code === 'KeyX' || code === 'ArrowUp') input.slurp = false;
   }, { capture:true, passive:true });
 
-  window.addEventListener('mousemove', (e) => {
-    const x = screenToWorldX(e.clientX);
-    // ignore jitter; only switch if meaningfully moved
-    if (input.targetX === null || Math.abs(x - input.targetX) >= 2) maybeSetPointerMode(x);
-  });
+  // ======== TILT CONTROLS (iOS permission) ========
+  const tilt = {
+    supported: !!window.DeviceOrientationEvent,
+    enabled: false,
+    requested: false,
+    zeroSet: false,
+    zero: 0,
+    raw: 0,
+    smooth: 0
+  };
 
-  window.addEventListener('touchstart', (e) => {
-    unlockAudioOnce();
-    if (e.touches[0]) maybeSetPointerMode(screenToWorldX(e.touches[0].clientX));
-  }, {passive:false});
-
-  window.addEventListener('touchmove', (e) => {
-    if (e.touches[0]) maybeSetPointerMode(screenToWorldX(e.touches[0].clientX));
-  }, {passive:false});
-
-  window.addEventListener('pointerdown', () => {
-    unlockAudioOnce();
-    if (!state.running) start();
-    else if (state.paused) togglePause();
-  });
-
-  // Mobile buttons
-  function bindHoldButton(el, onDown, onUp) {
-    const down = (ev) => { ev.preventDefault(); unlockAudioOnce(); onDown(); };
-    const up   = (ev) => { ev.preventDefault(); onUp(); };
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
-    el.addEventListener('pointerleave', up);
+  function orientationAngle(){
+    if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+    if (typeof window.orientation === 'number') return window.orientation;
+    return 0;
   }
 
-  document.querySelectorAll('[data-act]').forEach(btn => {
-    const act = btn.getAttribute('data-act');
-    if (act === 'left')  bindHoldButton(btn, () => { input.left = true; setKeysMode(); }, () => { input.left = false; });
-    if (act === 'right') bindHoldButton(btn, () => { input.right = true; setKeysMode(); }, () => { input.right = false; });
-    if (act === 'dash')  bindHoldButton(btn, () => { input.dash = true; setKeysMode(); }, () => { input.dash = false; });
-    if (act === 'slurp') bindHoldButton(btn, () => { input.slurp = true; setKeysMode(); }, () => { input.slurp = false; });
-    if (act === 'pause') {
-      btn.addEventListener('pointerdown', (ev) => {
-        ev.preventDefault();
-        unlockAudioOnce();
-        if (!state.running) start();
-        else togglePause();
-      });
-    }
-  });
+  function onDeviceOrientation(e){
+    if (e.gamma == null && e.beta == null) return;
 
-  // ======== GAME STATE (STARVING DYNAMICS) ========
+    // Map "left-right tilt" consistently across orientations.
+    const ang = orientationAngle();
+    let lr;
+    // portrait: use gamma
+    if (ang === 0) lr = e.gamma;
+    // upside-down portrait
+    else if (ang === 180) lr = -e.gamma;
+    // landscape right (home button / bar on left): use -beta
+    else if (ang === 90) lr = -e.beta;
+    // landscape left: use beta
+    else if (ang === -90 || ang === 270) lr = e.beta;
+    else lr = e.gamma;
+
+    if (!tilt.zeroSet) { tilt.zero = lr || 0; tilt.zeroSet = true; }
+    tilt.raw = (lr || 0) - tilt.zero;
+    tilt.smooth = tilt.smooth * 0.86 + tilt.raw * 0.14;
+  }
+
+  function enableTilt(){
+    if (tilt.enabled) return;
+    tilt.enabled = true;
+    tilt.zeroSet = false;
+    tilt.smooth = 0;
+    window.addEventListener('deviceorientation', onDeviceOrientation, true);
+  }
+
+  async function requestTiltPermissionOnce(){
+    if (!isCoarse) return; // only bother on mobile
+    if (!tilt.supported || tilt.requested) return;
+    tilt.requested = true;
+
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res === 'granted') enableTilt();
+      } else {
+        // older iOS
+        enableTilt();
+      }
+    } catch (_) {
+      // permission denied or not available
+    }
+  }
+
+  // ======== GAME STATE ========
   const state = {
     running: false,
     paused: true,
@@ -427,7 +486,6 @@
 
     starving: 35, // 0..100
     dangerPulseT: 0,
-
     level: 1,
 
     scraps: [],
@@ -442,8 +500,7 @@
 
     slurpTime: 0,
     slurpCooldown: 0,
-
-    slurpVfx: 0, // purely visual pulse
+    slurpVfx: 0,
 
     twinkleT: 0
   };
@@ -494,55 +551,22 @@
 
     pxFill(x-10, y+11+bob, 20, 2, '#c0182b');
     pxFill(x-2,  y+11+bob, 4, 2, '#ffcf4d');
-
-    // slurp indicator sparkle
-    if (state.running && !state.paused && state.slurpCooldown <= 0) {
-      pxFill(x-1, y-10, 2, 2, 'rgba(137,214,255,0.75)');
-    }
   }
 
   // ======== FUNNY FOOD TYPES ========
-  // base: score points
-  // feed: reduces starving (negative feed raises starving)
   const FoodTypes = [
-    { name:'Couch Fry (Vintage)', base: 14, feed: 12, rarity: 1.0, draw:(x,y)=>{
-      pxFill(x-3,y-3,6,6,'#5a3a1a'); pxFill(x-2,y-4,1,7,'#ffd35a'); pxFill(x,y-4,1,7,'#ffd35a'); pxFill(x+2,y-4,1,7,'#ffd35a');
-    }},
-    { name:'Nacho Shard of Power', base: 11, feed: 9, rarity: 1.0, draw:(x,y)=>{
-      pxFill(x-4,y-2,8,4,'#ffcf4d'); pxFill(x-2,y-3,4,1,'#ffdca0'); pxFill(x-1,y,2,1,'#e58f2a');
-    }},
-    { name:'Half-Eaten Taco (Hero)', base: 18, feed: 16, rarity: 0.85, draw:(x,y)=>{
-      pxFill(x-5,y-2,10,4,'#c77a22'); pxFill(x-4,y-1,8,2,'#2bdc74'); pxFill(x-2,y-1,4,1,'#ff6aa6');
-    }},
-    { name:'Mysterious Meatball', base: 16, feed: 13, rarity: 0.9, draw:(x,y)=>{
-      pxFill(x-4,y-4,8,8,'#a14f2a'); pxFill(x-2,y-2,1,1,'#d28a5e'); pxFill(x+1,y,1,1,'#d28a5e');
-    }},
-    { name:'Floor Grape (Probably Fine)', base: 9, feed: 7, rarity: 1.0, draw:(x,y)=>{
-      pxFill(x-3,y-3,6,6,'#7a3bd1'); pxFill(x-2,y-2,2,2,'#c9a2ff'); pxFill(x+1,y-1,1,1,'#c9a2ff');
-    }},
-    { name:'Soggy Crouton', base: 8, feed: 6, rarity: 1.0, draw:(x,y)=>{
-      pxFill(x-3,y-3,6,6,'#b07a4e'); pxFill(x-2,y-2,2,2,'#d2a27a'); pxFill(x+1,y+1,1,1,'#8b5a38');
-    }},
-    { name:'Wet Lettuce (Sad)', base: 6, feed: 9, rarity: 0.95, draw:(x,y)=>{
-      pxFill(x-4,y-3,8,6,'#1fbf5f'); pxFill(x-3,y-2,2,2,'#56ff96'); pxFill(x+1,y+1,2,1,'#128a44');
-    }},
-    { name:'Single Onion Ring Portal', base: 22, feed: 10, rarity: 0.5, onCatch:()=>{ state.magnetTime = 5.0; Audio.sfx('power'); }, draw:(x,y)=>{
-      pxFill(x-5,y-5,10,10,'#d7a52b'); pxFill(x-3,y-3,6,6,'#05060a'); pxFill(x-4,y-4,8,1,'#fff2b0');
-    }},
-    { name:'Ice Cube of Time', base: 10, feed: 8, rarity: 0.38, onCatch:()=>{ state.slowTime = 5.0; Audio.sfx('power'); }, draw:(x,y)=>{
-      pxFill(x-4,y-4,8,8,'#89d6ff'); pxFill(x-3,y-3,6,6,'#c9f0ff'); pxFill(x-2,y-2,4,4,'#89d6ff');
-    }},
-    { name:'Steak of Destiny (GOLD)', base: 55, feed: 12, rarity: 0.16, onCatch:()=>{ state.magnetTime = 7.0; Audio.sfx('power'); }, draw:(x,y)=>{
-      pxFill(x-5,y-3,10,6,'#ffcf4d'); pxFill(x-4,y-2,8,4,'#ff8b2e'); pxFill(x-2,y-1,4,2,'#fff2b0'); pxFill(x-6,y-4,12,1,'rgba(255,255,255,0.25)');
-    }},
-    { name:'Sock (Not Food)', base: -15, feed: -18, bad:true, rarity: 0.28, draw:(x,y)=>{
-      pxFill(x-4,y-4,8,8,'#6a7080'); pxFill(x-2,y-4,4,1,'#8b93a6'); pxFill(x-1,y+2,2,2,'#4e5462');
-    }},
-    { name:'Ghost Pepper Regret', base: -20, feed: -14, bad:true, rarity: 0.26, draw:(x,y)=>{
-      pxFill(x-2,y-4,4,8,'#ff2b4f'); pxFill(x-1,y-3,2,1,'#ff9bb0'); pxFill(x-1,y-5,2,1,'#21d16c');
-    }},
+    { name:'Couch Fry (Vintage)', base: 14, feed: 12, rarity: 1.0, draw:(x,y)=>{ pxFill(x-3,y-3,6,6,'#5a3a1a'); pxFill(x-2,y-4,1,7,'#ffd35a'); pxFill(x,y-4,1,7,'#ffd35a'); pxFill(x+2,y-4,1,7,'#ffd35a'); }},
+    { name:'Nacho Shard of Power', base: 11, feed: 9,  rarity: 1.0, draw:(x,y)=>{ pxFill(x-4,y-2,8,4,'#ffcf4d'); pxFill(x-2,y-3,4,1,'#ffdca0'); pxFill(x-1,y,2,1,'#e58f2a'); }},
+    { name:'Half-Eaten Taco (Hero)', base: 18, feed: 16, rarity: 0.85, draw:(x,y)=>{ pxFill(x-5,y-2,10,4,'#c77a22'); pxFill(x-4,y-1,8,2,'#2bdc74'); pxFill(x-2,y-1,4,1,'#ff6aa6'); }},
+    { name:'Mysterious Meatball', base: 16, feed: 13, rarity: 0.9, draw:(x,y)=>{ pxFill(x-4,y-4,8,8,'#a14f2a'); pxFill(x-2,y-2,1,1,'#d28a5e'); pxFill(x+1,y,1,1,'#d28a5e'); }},
+    { name:'Floor Grape (Probably Fine)', base: 9, feed: 7, rarity: 1.0, draw:(x,y)=>{ pxFill(x-3,y-3,6,6,'#7a3bd1'); pxFill(x-2,y-2,2,2,'#c9a2ff'); pxFill(x+1,y-1,1,1,'#c9a2ff'); }},
+    { name:'Wet Lettuce (Sad)', base: 6, feed: 9, rarity: 0.95, draw:(x,y)=>{ pxFill(x-4,y-3,8,6,'#1fbf5f'); pxFill(x-3,y-2,2,2,'#56ff96'); pxFill(x+1,y+1,2,1,'#128a44'); }},
+    { name:'Single Onion Ring Portal', base: 22, feed: 10, rarity: 0.5, onCatch:()=>{ state.magnetTime = 5.0; Audio.sfx('power'); }, draw:(x,y)=>{ pxFill(x-5,y-5,10,10,'#d7a52b'); pxFill(x-3,y-3,6,6,'#05060a'); pxFill(x-4,y-4,8,1,'#fff2b0'); }},
+    { name:'Ice Cube of Time', base: 10, feed: 8, rarity: 0.38, onCatch:()=>{ state.slowTime = 5.0; Audio.sfx('power'); }, draw:(x,y)=>{ pxFill(x-4,y-4,8,8,'#89d6ff'); pxFill(x-3,y-3,6,6,'#c9f0ff'); pxFill(x-2,y-2,4,4,'#89d6ff'); }},
+    { name:'Steak of Destiny (GOLD)', base: 55, feed: 12, rarity: 0.16, onCatch:()=>{ state.magnetTime = 7.0; Audio.sfx('power'); }, draw:(x,y)=>{ pxFill(x-5,y-3,10,6,'#ffcf4d'); pxFill(x-4,y-2,8,4,'#ff8b2e'); pxFill(x-2,y-1,4,2,'#fff2b0'); pxFill(x-6,y-4,12,1,'rgba(255,255,255,0.25)'); }},
+    { name:'Sock (Not Food)', base: -15, feed: -18, bad:true, rarity: 0.28, draw:(x,y)=>{ pxFill(x-4,y-4,8,8,'#6a7080'); pxFill(x-2,y-4,4,1,'#8b93a6'); pxFill(x-1,y+2,2,2,'#4e5462'); }},
+    { name:'Ghost Pepper Regret', base: -20, feed: -14, bad:true, rarity: 0.26, draw:(x,y)=>{ pxFill(x-2,y-4,4,8,'#ff2b4f'); pxFill(x-1,y-3,2,1,'#ff9bb0'); pxFill(x-1,y-5,2,1,'#21d16c'); }},
   ];
-
   function pickFoodType(){
     const total = FoodTypes.reduce((s,t)=>s+t.rarity,0);
     let r = Math.random()*total;
@@ -571,7 +595,7 @@
     });
   }
 
-  // ======== PARTICLES + FLOATING TEXT ========
+  // ======== PARTICLES + FLOATERS ========
   function pop(x,y, count, palette){
     for (let i=0;i<count;i++){
       state.particles.push({
@@ -585,7 +609,6 @@
       });
     }
   }
-
   function floatText(x,y,msg,color){
     state.floaters.push({ x, y, msg, color, t:0, life:0.9, vy:-18 });
   }
@@ -597,13 +620,11 @@
     state.lastT = now();
     Audio.sfx('start');
   }
-
   function togglePause(){
     state.paused = !state.paused;
     if (!state.paused) { state.lastT = now(); Audio.sfx('start'); }
     else { Audio.sfx('pause'); }
   }
-
   function restart(){
     state.running = true;
     state.paused = false;
@@ -614,7 +635,6 @@
     state.streak = 0;
     state.caught = 0;
     state.missed = 0;
-
     state.starving = 35;
 
     state.scraps.length = 0;
@@ -632,9 +652,9 @@
     resetGizmo();
     update.spawnT = 0;
 
+    if (tilt.enabled) tilt.zeroSet = false; // re-calibrate on restart
     Audio.sfx('start');
   }
-
   function gameOver(){
     state.running = false;
     state.paused = true;
@@ -654,6 +674,7 @@
     }
     for (let x=0; x<BW; x+=10) pxFill(x, 0, 2, world.tableY-6, 'rgba(255,255,255,0.06)');
 
+    // window
     pxFill(14, 14, 58, 34, '#0b1430');
     pxFill(16, 16, 54, 30, '#122a6a');
     state.twinkleT += 0.01;
@@ -667,18 +688,19 @@
     pxFill(42,14,2,34,'rgba(255,255,255,0.18)');
     pxFill(14,31,58,2,'rgba(255,255,255,0.18)');
 
+    // table
     const ty = world.tableY;
     pxFill(0, ty, BW, world.tableTopH, '#6b3b22');
     pxFill(0, ty+2, BW, 2, '#8f563b');
     pxFill(0, ty+world.tableTopH, BW, world.tableLipH, '#3a1f12');
 
+    // legs
     const legY = ty+world.tableTopH+world.tableLipH;
     const legH = world.floorY() - legY + 6;
     pxFill(28, legY, 10, legH, '#4b2a18');
     pxFill(BW-38, legY, 10, legH, '#4b2a18');
-    pxFill(30, legY, 2, legH, 'rgba(255,255,255,0.10)');
-    pxFill(BW-36, legY, 2, legH, 'rgba(255,255,255,0.10)');
 
+    // floor
     const fy = world.floorY();
     pxFill(0, fy, BW, BH-fy, '#151a28');
     for (let y=fy; y<BH; y+=8){
@@ -688,10 +710,6 @@
       }
     }
     pxFill(0, fy, BW, 1, 'rgba(255,255,255,0.18)');
-
-    pxFill(BW-156, 14, 140, 16, 'rgba(0,0,0,0.25)');
-    outlineRect(BW-156,14,140,16,'rgba(255,255,255,0.16)');
-    pxText('KEEP GIZMO ALIVE', BW-152, 18, '#56ff96');
   }
 
   // ======== HUD ========
@@ -706,7 +724,7 @@
     outlineRect(0,0,BW,16,'rgba(255,255,255,0.10)');
 
     const st = clamp(state.starving, 0, 100);
-    const barW = 120;
+    const barW = 108;
     const barX = 6;
     const barY = 6;
 
@@ -715,57 +733,50 @@
     pxFill(barX, barY, barW, 5, 'rgba(255,255,255,0.06)');
     pxFill(barX, barY, Math.round(barW * (st/100)), 5, starvingColor(st));
 
-    const mag  = state.magnetTime > 0 ? ` MAG:${state.magnetTime.toFixed(0)} ` : '';
-    const slow = state.slowTime > 0 ? ` SLOW:${state.slowTime.toFixed(0)} ` : '';
-    const dash = state.dashCooldown > 0 ? ` DASH:${state.dashCooldown.toFixed(0)} ` : ' DASH:OK ';
-    const slrp = state.slurpCooldown > 0 ? ` SLURP:${state.slurpCooldown.toFixed(0)} ` : ' SLURP:OK ';
-    const music = Audio.musicOn ? 'MUS:ON' : 'MUS:OFF';
-    const mute  = Audio.muted ? 'MUTE' : `VOL:${Math.round(Audio.gain*10)}`;
-
-    pxText(
-      `STARVING:${st.toFixed(0)}%  SCORE:${state.score}  STK:${state.streak}  C:${state.caught} M:${state.missed}  ${dash}${slrp}${mag}${slow} ${music} ${mute}`,
-      132, 4, '#eaf6ff'
-    );
-
-    pxFill(0,BH-10, BW, 10, 'rgba(0,0,0,0.22)');
-    pxText('Catch lowers STARVING. Miss raises it. 100% -> Gizmo eats the table leg.', 6, BH-9, '#ffd35a');
+    const dash = state.dashCooldown > 0 ? `DASH:${state.dashCooldown.toFixed(0)}` : 'DASH:OK';
+    const slrp = state.slurpCooldown > 0 ? `SLURP:${state.slurpCooldown.toFixed(0)}` : 'SLURP:OK';
+    const tiltTxt = (isCoarse ? (tilt.enabled ? 'TILT:ON' : 'TILT:OFF') : '');
+    const info = `STARV:${st.toFixed(0)}%  SCORE:${state.score}  STK:${state.streak}  ${dash} ${slrp} ${tiltTxt}`;
+    pxText(info, 120, 4, 'rgba(234,246,255,0.92)');
   }
 
+  // ======== OVERLAY (CENTERED + WRAPPED; FIXES CUT-OFF) ========
   function drawOverlay(){
     if (!state.running && state.paused) {
-      const msg1 = 'GIZMO’S TABLE SCRAPS';
-      const msg2 = `BEST:${state.best}  LAST:${state.score}`;
-      const msg3 = 'SPACE/⏯:PLAY  R:RESET  SLURP:X/↑  DASH:SHIFT';
-      const msg4 = 'STARVING rises over time + misses. Catch to survive.';
-
-      pxFill(14, 54, BW-28, 68, 'rgba(0,0,0,0.58)');
-      outlineRect(14,54,BW-28,68,'rgba(255,255,255,0.18)');
-      pxText(msg1, Math.floor(BW/2) - (msg1.length*4), 62, '#56ff96');
-      pxText(msg2, Math.floor(BW/2) - (msg2.length*4), 74, '#eaf6ff');
-      pxText(msg4, Math.floor(BW/2) - (msg4.length*4), 86, '#ffd35a');
-      pxText(msg3, Math.floor(BW/2) - (msg3.length*4), 98, '#ff6aa6');
+      const lines = [
+        'GIZMO’S TABLE SCRAPS',
+        `BEST: ${state.best}   LAST: ${state.score}`,
+        isCoarse ? 'TILT TO MOVE. TAP ANYWHERE TO SLURP.' : 'ARROWS/A-D TO MOVE. X TO SLURP.',
+        isCoarse ? 'TAP TO PLAY (ALLOW MOTION IF ASKED).' : 'SPACE TO PLAY.'
+      ];
+      const panel = drawCenteredPanel(lines, Math.floor(BH/2));
+      // recolor title line a bit
+      const title = panel.wrapped[0];
+      pxText(title, Math.floor((BW - textW(title))/2), panel.y + 8, '#56ff96');
     } else if (state.paused) {
-      const msg = 'PAUSED';
-      pxFill(74, 72, BW-148, 24, 'rgba(0,0,0,0.55)');
-      outlineRect(74,72,BW-148,24,'rgba(255,255,255,0.18)');
-      pxText(msg, Math.floor(BW/2) - (msg.length*4), 78, '#ffd35a');
+      const lines = ['PAUSED', isCoarse ? 'TAP ⏯ OR SPACE' : 'SPACE'];
+      const panel = drawCenteredPanel(lines, Math.floor(BH/2));
+      const title = panel.wrapped[0];
+      pxText(title, Math.floor((BW - textW(title))/2), panel.y + 8, '#ffd35a');
     }
   }
 
-  // ======== SLURP (FIXED + MUCH MORE OBVIOUS) ========
+  // ======== SLURP (TAP ANYWHERE ON CANVAS) ========
+  function requestSlurp(){
+    input.slurpPulse = true;
+  }
+
   function applySlurp(dt){
     if (state.slurpTime <= 0) return;
 
-    const radius = 52;          // bigger than before
-    const strength = 900;       // much stronger than before
+    const radius = 56;
+    const strength = 950;
     const cx = gizmo.x;
     const cy = gizmo.y + 6;
 
-    // Visual pulse timer
-    state.slurpVfx = Math.max(state.slurpVfx, 0.18);
+    state.slurpVfx = Math.max(state.slurpVfx, 0.20);
 
     for (const s of state.scraps) {
-      // Don't vacuum bad items as strongly (still possible)
       const badMul = s.type.bad ? 0.55 : 1.0;
 
       const dx = cx - s.x;
@@ -773,15 +784,14 @@
       const d = Math.max(1, Math.sqrt(dx*dx + dy*dy));
       if (d > radius) continue;
 
-      const t = 1 - (d / radius); // 0..1
+      const t = 1 - (d / radius);
       const accel = strength * (0.35 + 0.65*t) * badMul;
 
-      // Accelerate toward Gizmo
       s.vx += (dx / d) * accel * dt;
       s.vy += (dy / d) * accel * dt;
 
-      // tiny sparkle trail
       s.pulled = 0.30;
+
       state.particles.push({
         x: s.x + rand(-1,1),
         y: s.y + rand(-1,1),
@@ -793,7 +803,6 @@
         c: s.type.bad ? '#ff6aa6' : '#89d6ff'
       });
 
-      // If it's very close, nudge it into the catch zone
       if (d < 10 && !s.type.bad) {
         s.x += (dx / d) * 30 * dt;
         s.y += (dy / d) * 30 * dt;
@@ -803,43 +812,42 @@
 
   function drawSlurpVfx(){
     if (state.slurpVfx <= 0) return;
+
     const x = gizmo.x|0;
     const y = (gizmo.y + 4)|0;
     const pulse = state.slurpVfx;
+    const r = 10 + Math.round(pulse * 24);
 
-    // ring around gizmo
-    const r = 10 + Math.round(pulse * 22);
-    const c = 'rgba(137,214,255,0.25)';
     for (let i=0;i<12;i++){
       const a = (i/12) * Math.PI * 2;
       const px = x + Math.round(Math.cos(a) * r);
       const py = y + Math.round(Math.sin(a) * r);
-      pxFill(px, py, 1, 1, c);
+      pxFill(px, py, 1, 1, 'rgba(137,214,255,0.30)');
     }
 
-    // suction lines to nearby scraps
-    const radius = 52;
+    const radius = 56;
     const cx = gizmo.x;
     const cy = gizmo.y + 6;
     let drawn = 0;
+
     for (const s of state.scraps) {
       const dx = cx - s.x;
       const dy = cy - s.y;
       const d2 = dx*dx + dy*dy;
       if (d2 > radius*radius) continue;
-      if (drawn++ > 7) break; // limit clutter
+      if (drawn++ > 7) break;
 
       const steps = 5;
       for (let k=1;k<=steps;k++){
-        const t = k/(steps+1);
-        const lx = Math.round(s.x + dx*t);
-        const ly = Math.round(s.y + dy*t);
-        pxFill(lx, ly, 1, 1, s.type.bad ? 'rgba(255,106,166,0.25)' : 'rgba(137,214,255,0.35)');
+        const tt = k/(steps+1);
+        const lx = Math.round(s.x + dx*tt);
+        const ly = Math.round(s.y + dy*tt);
+        pxFill(lx, ly, 1, 1, s.type.bad ? 'rgba(255,106,166,0.25)' : 'rgba(137,214,255,0.38)');
       }
     }
   }
 
-  // ======== DIFFICULTY + STARVING ========
+  // ======== STARVING ========
   function starvationTick(dt){
     const comfort = clamp((60 - state.starving) / 60, 0, 1);
     const diff = clamp(1 + (state.tAlive/40) + comfort*0.8, 1, 4.0);
@@ -873,34 +881,49 @@
     starvationTick(dt);
     if (state.starving >= 100) { gameOver(); return; }
 
+    // slow-time scaling
     const slowFactor = (state.slowTime > 0) ? 0.62 : 1.0;
     dt *= slowFactor;
 
-    // dash trigger
+    // dash trigger (mobile button or shift key)
     if (input.dash && state.dashCooldown <= 0 && state.dashTime <= 0) {
       state.dashTime = 0.25;
       state.dashCooldown = 1.25;
       Audio.sfx('dash');
     }
 
-    // slurp trigger (works on keyboard + mobile button; hold ok, it re-triggers once cooldown done)
-    if (input.slurp && state.slurpCooldown <= 0 && state.slurpTime <= 0) {
+    // slurp trigger (tap/keyboard)
+    if ((input.slurpPulse) && state.slurpCooldown <= 0 && state.slurpTime <= 0) {
       state.slurpTime = 0.55;
       state.slurpCooldown = 1.10;
       Audio.sfx('slurp');
+      floatText(gizmo.x, gizmo.y - 18, 'SLURP!', '#89d6ff');
     }
+    input.slurpPulse = false;
 
     // movement
     const dashMul = (state.dashTime > 0) ? 1.75 : 1.0;
     gizmo.bob += dt * (Math.abs(gizmo.vx) > 1 ? 8 : 3);
 
-    if (input.mode === 'pointer' && input.targetX !== null) {
+    let dir = 0;
+
+    // Tilt (mobile Safari)
+    if (isCoarse && tilt.enabled) {
+      // deadzone + scaling
+      const dead = 2.5;
+      const v = (Math.abs(tilt.smooth) < dead) ? 0 : tilt.smooth;
+      const tiltDir = clamp(v / 16, -1.25, 1.25); // ~16deg => full speed
+      dir += tiltDir;
+    }
+
+    // Buttons/keys add on top
+    dir += (input.left ? -1 : 0) + (input.right ? 1 : 0);
+    dir = clamp(dir, -1.6, 1.6);
+
+    if (!isCoarse && input.mode === 'pointer' && input.targetX != null) {
       const dx = input.targetX - gizmo.x;
       gizmo.vx = dx * 7 * dashMul;
     } else {
-      let dir = 0;
-      if (input.left) dir -= 1;
-      if (input.right) dir += 1;
       gizmo.vx = dir * gizmo.speed * dashMul;
     }
 
@@ -910,7 +933,7 @@
 
     state.level = 1 + Math.floor(state.tAlive / 18);
 
-    // spawn cadence (easier when starving high)
+    // spawning (easier when starving high)
     const starvingEase = clamp((state.starving - 40) / 60, 0, 1);
     const comfort = clamp((60 - state.starving) / 60, 0, 1);
     const diff = clamp(1 + (state.tAlive/35) + comfort*0.9, 1, 4.2);
@@ -923,7 +946,7 @@
       if (Math.random() < (0.04 + diff*0.02) && starvingEase < 0.8) spawnScrap();
     }
 
-    // slurp effect (strong + obvious)
+    // slurp physics
     applySlurp(dt);
 
     // scraps update + collision
@@ -935,6 +958,7 @@
     for (let i=state.scraps.length-1; i>=0; i--){
       const s = state.scraps[i];
 
+      // magnet assistance for good items
       const baseMag = 0.08;
       const powerMag = (state.magnetTime > 0) ? 0.40 : 0;
       const magStrength = baseMag + powerMag;
@@ -985,7 +1009,7 @@
           else Audio.sfx('catch');
 
           pop(sx, sy, 12 + Math.floor(pts/9));
-          floatText(sx, sy-8, `+${pts}  ${s.type.name}`, '#eaf6ff');
+          floatText(sx, sy-8, `+${pts} ${s.type.name}`, '#eaf6ff');
         }
 
         if (state.starving >= 100) { gameOver(); return; }
@@ -1030,7 +1054,7 @@
     }
   }
 
-  // ======== DRAW HELPERS ========
+  // ======== DRAW ========
   function drawScrap(s){
     const x = s.x|0, y = s.y|0;
     pxFill(x-3, y+4, 6, 1, 'rgba(0,0,0,0.25)');
@@ -1040,7 +1064,6 @@
       const on = (s.sparkle < 0.33) || (s.sparkle > 0.66);
       if (on) { pxFill(x-7,y-6,1,1,'#fff2b0'); pxFill(x+6,y-2,1,1,'#fff2b0'); pxFill(x-2,y+6,1,1,'#fff2b0'); }
     }
-
     if (s.pulled > 0) {
       pxFill(x-6, y-6, 1, 1, 'rgba(137,214,255,0.75)');
       pxFill(x+6, y-4, 1, 1, 'rgba(86,255,150,0.75)');
@@ -1060,7 +1083,7 @@
     for (const f of state.floaters){
       const a = 1 - (f.t / f.life);
       bctx.globalAlpha = Math.max(0, Math.min(1, a));
-      pxText(f.msg, (f.x|0) - Math.floor((f.msg.length*4)), f.y|0, f.color);
+      pxText(f.msg, (f.x|0) - Math.floor(textW(f.msg)/2), f.y|0, f.color);
     }
     bctx.globalAlpha = 1;
   }
@@ -1071,10 +1094,7 @@
     drawBackground();
     for (const s of state.scraps) drawScrap(s);
     drawParticles();
-
-    // slurp VFX behind gizmo but on top of scraps/particles reads better
     drawSlurpVfx();
-
     drawGizmo();
     drawFloaters();
     drawHUD();
@@ -1083,38 +1103,69 @@
     sctx.imageSmoothingEnabled = false;
     sctx.clearRect(0,0,window.innerWidth, window.innerHeight);
     sctx.drawImage(buf, 0, 0, BW, BH, ox, oy, BW*scale, BH*scale);
-
-    // vignette
-    sctx.save();
-    sctx.globalAlpha = 0.10;
-    const g = sctx.createRadialGradient(
-      window.innerWidth/2, window.innerHeight/2, Math.min(window.innerWidth, window.innerHeight)*0.2,
-      window.innerWidth/2, window.innerHeight/2, Math.max(window.innerWidth, window.innerHeight)*0.7
-    );
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,1)');
-    sctx.fillStyle = g;
-    sctx.fillRect(0,0,window.innerWidth, window.innerHeight);
-    sctx.restore();
   }
 
   // ======== LOOP ========
   function loop(){
     requestAnimationFrame(loop);
-
     const t = now();
     let dt = (t - state.lastT)/1000;
     state.lastT = t;
     dt = Math.min(dt, 0.05);
 
-    const isGameplayActive = (state.running && !state.paused);
-
-    if (isGameplayActive) update(dt);
+    const active = (state.running && !state.paused);
+    if (active) update(dt);
     render();
-
-    if (Audio.ctx) Audio.tickMusic(isGameplayActive);
+    if (Audio.ctx) Audio.tickMusic(active);
   }
   loop();
+
+  // ======== CANVAS TAP BEHAVIOR (iOS): TAP = SLURP (WHEN PLAYING) ========
+  screen.addEventListener('pointerdown', async (e) => {
+    e.preventDefault();
+    unlockAudioOnce();
+    await requestTiltPermissionOnce();
+
+    if (!state.running) {
+      // calibrate tilt baseline right when starting to prevent drift
+      if (tilt.enabled) tilt.zeroSet = false;
+      start();
+      return;
+    }
+    if (state.paused) {
+      togglePause();
+      return;
+    }
+
+    // Playing: tap anywhere to slurp
+    requestSlurp();
+  }, { passive:false });
+
+  // ======== MOBILE BUTTONS ========
+  function bindHoldButton(el, onDown, onUp) {
+    const down = (ev) => { ev.preventDefault(); ev.stopPropagation(); unlockAudioOnce(); onDown(); };
+    const up   = (ev) => { ev.preventDefault(); ev.stopPropagation(); onUp(); };
+    el.addEventListener('pointerdown', down, { passive:false });
+    el.addEventListener('pointerup', up, { passive:false });
+    el.addEventListener('pointercancel', up, { passive:false });
+    el.addEventListener('pointerleave', up, { passive:false });
+  }
+
+  document.querySelectorAll('[data-act]').forEach(btn => {
+    const act = btn.getAttribute('data-act');
+    if (act === 'left')  bindHoldButton(btn, () => { input.left = true; setKeysMode(); }, () => { input.left = false; });
+    if (act === 'right') bindHoldButton(btn, () => { input.right = true; setKeysMode(); }, () => { input.right = false; });
+    if (act === 'dash')  bindHoldButton(btn, () => { input.dash = true; setKeysMode(); }, () => { input.dash = false; });
+    if (act === 'pause') {
+      btn.addEventListener('pointerdown', async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        unlockAudioOnce();
+        await requestTiltPermissionOnce();
+        if (!state.running) start();
+        else togglePause();
+      }, { passive:false });
+    }
+  });
 
 })();
 </script>
