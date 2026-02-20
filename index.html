@@ -1315,23 +1315,38 @@
   screen.addEventListener('touchstart', handleCanvasTap, { passive:false });
 
   // Keyboard (desktop)
-  document.addEventListener('keydown', (e) => {
+   document.addEventListener('keydown', (e) => {
     unlockAudioOnce();
-    const owned = new Set(['ArrowLeft','ArrowRight','Space','ShiftLeft','ShiftRight','KeyX','KeyR','KeyM','KeyB']);
-    if (owned.has(e.code)) e.preventDefault();
+
+    const isSpace =
+      e.code === 'Space' ||
+      e.code === 'Spacebar' ||       // older Safari / some keyboards
+      e.key === ' ' ||               // most reliable
+      e.key === 'Spacebar';
+
+    const owned = new Set([
+      'ArrowLeft','ArrowRight','ArrowUp',
+      'KeyA','KeyD','KeyX',
+      'ShiftLeft','ShiftRight',
+      'KeyR','KeyM','KeyB'
+    ]);
+
+    if (owned.has(e.code) || isSpace) e.preventDefault();
+
+    // Space behavior: start / pause / resume / restart
+    if (isSpace) {
+      if (state.phase === 'title') startGame();
+      else if (state.phase === 'paused') resumeGame();
+      else if (state.phase === 'playing') pauseGame();
+      else restartGame(); // gameover (or anything unexpected) -> restart
+      return;
+    }
 
     if (e.code === 'ArrowLeft' || e.code === 'KeyA') input.left = true;
     if (e.code === 'ArrowRight' || e.code === 'KeyD') input.right = true;
     if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') input.dash = true;
 
     if (e.code === 'KeyX' || e.code === 'ArrowUp') queueSlurp();
-
-    if (e.code === 'Space') {
-      if (state.phase === 'title') startGame();
-      else if (state.phase === 'paused') resumeGame();
-      else if (state.phase === 'playing') pauseGame();
-      else if (state.phase === 'gameover') restartGame();
-    }
 
     if (e.code === 'KeyR') restartGame();
     if (e.code === 'KeyM') Audio.setMute(!Audio.muted);
